@@ -9,11 +9,11 @@
 #include "csapp.h"
 
 void doit(int fd);
-void read_requesthdrs(rio_t *rp, int fd);
+int read_requesthdrs(rio_t *rp);
 int parse_uri(char *uri, char *filename, char *cgiargs);
 void serve_static(int fd, char *filename, int filesize, char *method);
 void get_filetype(char *filename, char *filetype);
-void serve_dynamic(int fd, char *filename, char *cgiargs, char *method);
+void serve_dynamic(int fd, char *filename, char *cgiargs, char *method, int content_length, char *post_data);
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg,
                  char *longmsg);
 void sigchld_handler(int sig);
@@ -34,6 +34,8 @@ int main(int argc, char **argv)
 
   listenfd = Open_listenfd(argv[1]);
   Signal(SIGCHLD, sigchld_handler);
+  // EPIPE 에러 무시
+  Signal(SIGPIPE, SIG_IGN);
 
   while (1)
   {
@@ -59,15 +61,15 @@ void doit(int fd)
   Rio_readlineb(&rio, buf, MAXLINE);
   printf("Request Line:\n%s\n", buf);
   sscanf(buf, "%s %s %s", method, uri, version);
-  // GET도 아니고 HEAD도 아니면
-  if (strcasecmp(method, "GET") && strcasecmp(method, "HEAD"))
+  // GET도 아니고 HEAD도 아니고 POST도 아니면
+  if (strcasecmp(method, "GET") && strcasecmp(method, "HEAD") && strcasecmp(method, "POST"))
   {
     clienterror(fd, method, "501", "Not implemented",
               "Tiny does not implement this method");
     return;
   }
 
-  read_requesthdrs(&rio, fd);
+  int content_length = read_requesthdrs(&rio);
 
   is_static = parse_uri(uri, filename, cgiargs);
   if (stat(filename, &sbuf) < 0)
@@ -95,7 +97,11 @@ void doit(int fd)
                   "Tiny couldn't run the CGI program");
       return;
     }
-    serve_dynamic(fd, filename, cgiargs, method);
+    char post_data[MAXLINE] = {0};
+    if (content_length > 0)
+      Rio_readnb(&rio, post_data, content_length);
+
+    serve_dynamic(fd, filename, cgiargs, method, content_length, post_data);
   }
 }
 
@@ -121,19 +127,22 @@ void clienterror(int fd, char *cause, char *errnum,
   Rio_writen(fd, body, strlen(body));
 }
 
-void read_requesthdrs(rio_t *rp, int fd)
+int read_requesthdrs(rio_t *rp)
 {
   char buf[MAXLINE];
+  int content_length = 0;
 
   printf("Request headers:\n");
   Rio_readlineb(rp, buf, MAXLINE);
   while(strcmp(buf, "\r\n"))
   {
+    if (strncasecmp(buf, "Content-Length:", 15) == 0)
+      sscanf(buf, "Content-Length: %d", &content_length);
     printf("%s", buf);
     Rio_readlineb(rp, buf, MAXLINE);
   }
   printf("\n");
-  return;
+  return content_length;
 }
 
 int parse_uri(char *uri, char *filename, char *cgiargs)
@@ -215,15 +224,16 @@ void serve_static(int fd, char *filename, int filesize, char *method)
 
 void sigchld_handler(int sig)
 {
-  int olderrno = errno;
   // 좀비 프로세스 수거
   while (waitpid(-1, NULL, WNOHANG) > 0) {}
-  errno = olderrno;
+  return;
 }
 
-void serve_dynamic(int fd, char *filename, char *cgiargs, char *method)
+void serve_dynamic(int fd, char *filename, char *cgiargs,
+                   char *method, int content_length, char *post_data)
 {
   char buf[MAXLINE], *emptylist[] = { NULL };
+  char content_length_str[20];
 
   sprintf(buf, "HTTP/1.0 200 OK\r\n");
   Rio_writen(fd, buf, strlen(buf));
@@ -235,9 +245,45 @@ void serve_dynamic(int fd, char *filename, char *cgiargs, char *method)
     // 자식 프로세스
     if (Fork() == 0)
     {
+      setenv("REQUEST_METHOD", method, 1);
       setenv("QUERY_STRING", cgiargs, 1);
       Dup2(fd, STDOUT_FILENO);
       Execve(filename, emptylist, environ);
+    }
+  }
+
+  else if (strcasecmp(method, "POST") == 0)
+  {
+    int pfd[2];
+    if (pipe(pfd) < 0)
+    {
+        clienterror(fd, "pipe()", "500", "Internal Server Error", "Faileld to create pipe");
+        return;
+    }
+
+    // 자식 프로세스
+    if (Fork() == 0)
+    {
+      // 쓰기 닫기
+      Close(pfd[1]);
+      setenv("REQUEST_METHOD", method, 1);
+      sprintf(content_length_str, "%d", content_length);
+      setenv("CONTENT_LENGTH", content_length_str, 1);
+      Dup2(pfd[0], STDIN_FILENO);
+      Close(pfd[0]);
+      Dup2(fd, STDOUT_FILENO);
+      Execve(filename, emptylist, environ);
+      exit(0);
+    }
+    // 부모 프로세스
+    else
+    {
+      // 읽기 닫기
+      Close(pfd[0]);
+      // 본문 파이프에 쓰기
+      Rio_writen(pfd[1], post_data, content_length);
+      Close(pfd[1]);
+      waitpid(-1, NULL, 0);
     }
   }
 }
