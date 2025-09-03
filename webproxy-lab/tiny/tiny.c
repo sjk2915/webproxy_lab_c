@@ -133,13 +133,11 @@ int read_requesthdrs(rio_t *rp)
   int content_length = 0;
 
   printf("Request headers:\n");
-  Rio_readlineb(rp, buf, MAXLINE);
-  while(strcmp(buf, "\r\n"))
+  while(Rio_readlineb(rp, buf, MAXLINE) > 0 && strcmp(buf, "\r\n"))
   {
     if (strncasecmp(buf, "Content-Length:", 15) == 0)
       sscanf(buf, "Content-Length: %d", &content_length);
     printf("%s", buf);
-    Rio_readlineb(rp, buf, MAXLINE);
   }
   printf("\n");
   return content_length;
@@ -226,7 +224,7 @@ void sigchld_handler(int sig)
 {
   // 좀비 프로세스 수거
   while (waitpid(-1, NULL, WNOHANG) > 0) {}
-  return;
+  return; 
 }
 
 void serve_dynamic(int fd, char *filename, char *cgiargs,
