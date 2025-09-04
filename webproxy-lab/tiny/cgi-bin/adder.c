@@ -12,7 +12,7 @@ int main(void)
 
   char *method = getenv("REQUEST_METHOD");
   // GET 요청 처리
-  if (method && strcmp(method, "GET") == 0)
+  if (method && strcasecmp(method, "GET") == 0)
   {
     buf = getenv("QUERY_STRING");
 
@@ -24,7 +24,7 @@ int main(void)
     n2 = atoi(strchr(arg2, '=') + 1);
   }
   // POST 요청 처리
-  else if (method && strcmp(method, "POST") == 0)
+  else if (method && strcasecmp(method, "POST") == 0)
   {
     int len = atoi(getenv("CONTENT_LENGTH"));
     char post_data[MAXLINE];
@@ -32,7 +32,6 @@ int main(void)
     if (Rio_readn(STDIN_FILENO, post_data, len) > 0)
     {
       post_data[len] = '\0';
-      buf = post_data;
 
       p = strchr(post_data, '&');
       *p = '\0';

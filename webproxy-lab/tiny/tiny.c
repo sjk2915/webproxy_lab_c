@@ -97,10 +97,14 @@ void doit(int fd)
                   "Tiny couldn't run the CGI program");
       return;
     }
-    char post_data[MAXLINE] = {0};
+    char post_data[MAXLINE];
     if (content_length > 0)
+    {
       Rio_readnb(&rio, post_data, content_length);
-
+      printf("Request body:\n");
+      printf("%s\r\n", post_data);
+      printf("\n");
+    }
     serve_dynamic(fd, filename, cgiargs, method, content_length, post_data);
   }
 }
@@ -186,6 +190,8 @@ void get_filetype(char *filename, char *filetype)
     strcpy(filetype, "image/jpeg");
   else if (strstr(filename, ".mpg"))
     strcpy(filetype, "video/mpeg");
+  else if (strstr(filename, ".mp4"))
+    strcpy(filetype, "video/mp4");
   else
     strcpy(filetype, "text/plain");
 }
@@ -252,6 +258,7 @@ void serve_dynamic(int fd, char *filename, char *cgiargs,
 
   else if (strcasecmp(method, "POST") == 0)
   {
+    // 파이프 생성
     int pfd[2];
     if (pipe(pfd) < 0)
     {
